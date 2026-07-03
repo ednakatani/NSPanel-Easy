@@ -32,6 +32,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 MAPPING="${SCRIPT_DIR}/mapping.yaml"
 PLACEHOLDER="${SCRIPT_DIR}/misc/placeholder.png"
+BACKGROUND_COLORS="${SCRIPT_DIR}/background/colors.yaml"
 
 # ---------------------------------------------------------------------------
 # Arguments
@@ -69,6 +70,11 @@ if [[ ! -f "${MAPPING}" ]]; then
     exit 1
 fi
 
+if [[ ! -f "${BACKGROUND_COLORS}" ]]; then
+    echo "ERROR: Background colors file not found: ${BACKGROUND_COLORS}" >&2
+    exit 1
+fi
+
 # ---------------------------------------------------------------------------
 # ImageMagick wrapper
 # Runs magick/convert from within SCRIPT_DIR (ui/pics/) so that relative paths
@@ -103,6 +109,34 @@ if [[ "${ORIENTATION}" == landscape* ]]; then
 else
     echo "Generating portrait images..."
 fi
+
+# ---------------------------------------------------------------------------
+# Background canvas generation
+# Regenerates the solid-color background canvases from background/colors.yaml.
+# These are the files mapping.yaml's background_dark/background_light entries
+# point to, so every page picks up the new color once compositing runs.
+# ---------------------------------------------------------------------------
+
+read_background_color() {
+    python3 -c "import yaml; print(yaml.safe_load(open('${BACKGROUND_COLORS}'))['$1'])"
+}
+
+DARK_COLOR="$(read_background_color dark)"
+LIGHT_COLOR="$(read_background_color light)"
+
+if [[ "${ORIENTATION}" == landscape* ]]; then
+    CANVAS_SIZE="480x320"
+    DARK_CANVAS="background/background_dark_landscape.png"
+    LIGHT_CANVAS="background/background_light_landscape.png"
+else
+    CANVAS_SIZE="320x480"
+    DARK_CANVAS="background/background_dark_portrait.png"
+    LIGHT_CANVAS="background/background_light_portrait.png"
+fi
+
+echo "Generating solid background canvases (dark: ${DARK_COLOR}, light: ${LIGHT_COLOR})..."
+magick_command -size "${CANVAS_SIZE}" xc:"${DARK_COLOR}" "${DARK_CANVAS}"
+magick_command -size "${CANVAS_SIZE}" xc:"${LIGHT_COLOR}" "${LIGHT_CANVAS}"
 
 # ---------------------------------------------------------------------------
 # Placeholder generation

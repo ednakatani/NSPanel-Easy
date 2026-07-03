@@ -1,0 +1,10 @@
+# colors.yaml
+#
+# Solid background color used on every page, in place of the previous
+# wallpaper artwork. Accepts any ImageMagick color spec, e.g. "#000000",
+# "black", "#1a1a1a".
+#
+# Edit the values below and re-run generate_images.sh to apply.
+
+dark: "#000000"
+light: "#000000"
