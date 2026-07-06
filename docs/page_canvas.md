@@ -253,6 +253,186 @@ automation:
                 milliseconds: 50
 ```
 
+## Example: Two-person daily agenda (tap to switch)
+
+This example draws a single person's calendar events for the current day on the canvas page,
+with two buttons to switch between two people (for example, you and a partner). The canvas page
+has no swipe gesture — unlike the built-in weather pages, it has no touch-enabled components in
+its content area — so switching is done by tapping two separate buttons instead of swiping.
+
+The pattern has three parts:
+
+1. A **helper** that remembers which person's agenda was last requested.
+2. **Two scripts** — one per person — that set the helper and open the canvas page. Assign each
+   script to a button of your choice via the Blueprint's button configuration (see Step 1 above).
+3. **One automation** that reads the helper when the canvas page opens, fetches that person's
+   events for today via the `calendar.get_events` action, and draws them.
+
+### Prerequisite: two calendar entities
+
+This example assumes each person has their own Google Calendar connected to Home Assistant
+(**Settings → Devices & Services → Add Integration → Google Calendar**, once per account). Each
+connected calendar shows up as its own `calendar.*` entity — note the exact entity IDs (for
+example `calendar.eduardo` and `calendar.companheiro`) and use them in the automation below.
+
+### Helper to remember the selected person
+
+```yaml
+input_select:
+  nspanel_canvas_calendar:
+    name: "NSPanel - Agenda selecionada"
+    options:
+      - person1
+      - person2
+    initial: person1
+```
+
+### Scripts to open the page
+
+```yaml
+script:
+  open_agenda_person1:
+    alias: "Abrir agenda - Pessoa 1"
+    sequence:
+      - action: input_select.select_option
+        target:
+          entity_id: input_select.nspanel_canvas_calendar
+        data:
+          option: person1
+      - action: esphome.<panel_name>_command
+        data:
+          cmd: "page canvas"
+
+  open_agenda_person2:
+    alias: "Abrir agenda - Pessoa 2"
+    sequence:
+      - action: input_select.select_option
+        target:
+          entity_id: input_select.nspanel_canvas_calendar
+        data:
+          option: person2
+      - action: esphome.<panel_name>_command
+        data:
+          cmd: "page canvas"
+```
+
+### Automation to draw the agenda
+
+```yaml
+automation:
+  - alias: Canvas - Daily agenda
+    triggers:
+      - trigger: state
+        entity_id: sensor.<panel_name>_current_page
+        to: canvas
+    variables:
+      # Appearance
+      font: 3
+      card_bg: 0           # matches the panel's solid black background
+      card_margin: 8
+      badge_color: 1694    # time badge color — adjust to taste
+      no_events_color: 52857
+      # Card geometry (portrait: 320px visible width)
+      card_x: 4
+      card_y: 52           # just below the 48px header
+      card_w: 312
+      card_h: 420          # fits within the 429px visible height limit
+      # Row geometry
+      row_h: 44
+      badge_w: 74
+      col_time_x: "{{ card_x + card_margin }}"
+      col_summary_x: "{{ card_x + card_margin + badge_w + 8 }}"
+      col_summary_w: "{{ card_w - card_margin * 2 - badge_w - 8 }}"
+      table_y: "{{ card_y + card_margin }}"
+      max_rows: "{{ ((card_h - card_margin * 2) / row_h) | int }}"
+      # Which person is currently selected
+      person: "{{ states('input_select.nspanel_canvas_calendar') }}"
+      calendar_entity: >
+        {{ 'calendar.eduardo' if person == 'person1' else 'calendar.companheiro' }}
+      person_label: >
+        {{ 'Seus compromissos' if person == 'person1' else 'Compromissos do companheiro' }}
+    actions:
+      # Fetch today's events for the selected person's calendar
+      - action: calendar.get_events
+        target:
+          entity_id: "{{ calendar_entity }}"
+        data:
+          start_date_time: "{{ today_at('00:00') }}"
+          end_date_time: "{{ today_at('00:00') + timedelta(days=1) }}"
+        response_variable: agenda_response
+
+      - variables:
+          events: "{{ agenda_response[calendar_entity].events | default([]) }}"
+
+      # Header icon (mdi:calendar) and label showing whose agenda this is
+      - action: esphome.<panel_name>_component_text
+        data:
+          page: canvas
+          id: icon_state
+          txt: ""  # mdi:calendar
+
+      - action: esphome.<panel_name>_component_text
+        data:
+          page: canvas
+          id: page_label
+          txt: "{{ person_label }}"
+
+      # Card background — drawn once before the rows
+      - action: esphome.<panel_name>_command
+        data:
+          cmd: "fill {{ card_x }},{{ card_y }},{{ card_w }},{{ card_h }},{{ card_bg }}"
+
+      - delay:
+          milliseconds: 20
+
+      - choose:
+          - conditions: "{{ events | count == 0 }}"
+            sequence:
+              - action: esphome.<panel_name>_command
+                data:
+                  cmd: "xstr {{ col_time_x }},{{ table_y }},{{ card_w - card_margin * 2 }},{{ row_h }},{{ font }},{{ no_events_color }},{{ card_bg }},1,1,1,\"Sem compromissos hoje\""
+        default:
+          - repeat:
+              count: "{{ [events | count, max_rows] | min }}"
+              sequence:
+                - variables:
+                    ev: "{{ events[repeat.index - 1] }}"
+                    ry: "{{ table_y + (repeat.index - 1) * row_h }}"
+                    is_all_day: "{{ ev.start | length == 10 }}"
+                    start_label: >
+                      {{ 'Dia todo' if is_all_day else (as_timestamp(ev.start) | timestamp_custom('%H:%M', True)) }}
+
+                # Time badge
+                - action: esphome.<panel_name>_command
+                  data:
+                    cmd: "fill {{ col_time_x }},{{ ry }},{{ badge_w }},36,{{ badge_color }}"
+
+                - delay:
+                    milliseconds: 10
+
+                - action: esphome.<panel_name>_command
+                  data:
+                    cmd: "xstr {{ col_time_x }},{{ ry }},{{ badge_w }},36,{{ font }},65535,{{ badge_color }},1,1,1,\"{{ start_label }}\""
+
+                - delay:
+                    milliseconds: 10
+
+                # Event summary
+                - action: esphome.<panel_name>_command
+                  data:
+                    cmd: "xstr {{ col_summary_x }},{{ ry }},{{ col_summary_w }},36,{{ font }},65535,{{ card_bg }},0,1,1,\"{{ ev.summary }}\""
+
+                # Allow the full row to render before starting the next one
+                - delay:
+                    milliseconds: 50
+```
+
+> [!NOTE]
+> Long event summaries are not wrapped or truncated automatically — keep `col_summary_w` in mind
+> and remember the 255-byte limit per `cmd` string mentioned above. Summaries containing a literal
+> `"` character will break the command string; strip or escape it first if that is a concern for
+> your calendars.
+
 ## Nextion coordinate reference
 
 ### Landscape (EU and US Landscape)
