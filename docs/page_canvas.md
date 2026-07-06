@@ -255,10 +255,15 @@ automation:
 
 ## Example: Two-person daily agenda (tap to switch)
 
-This example draws a single person's calendar events for the current day on the canvas page,
-with two buttons to switch between two people (for example, you and a partner). The canvas page
-has no swipe gesture — unlike the built-in weather pages, it has no touch-enabled components in
-its content area — so switching is done by tapping two separate buttons instead of swiping.
+This example draws a single person's calendar events for the current day on the canvas page as
+plain text lines (a "terminal" look — no cards, no colored badges), with two buttons to switch
+between two people (for example, you and a partner). The canvas page has no swipe gesture —
+unlike the built-in weather pages, it has no touch-enabled components in its content area — so
+switching is done by tapping two separate buttons instead of swiping.
+
+Going back doesn't need anything extra: the canvas page's standard header already ships with a
+close button, which returns to `home` (or to `back_page_id`, see "Setting the return page" above)
+out of the box. No additional touch component is required for that.
 
 The pattern has three parts:
 
@@ -266,7 +271,7 @@ The pattern has three parts:
 2. **Two scripts** — one per person — that set the helper and open the canvas page. Assign each
    script to a button of your choice via the Blueprint's button configuration (see Step 1 above).
 3. **One automation** that reads the helper when the canvas page opens, fetches that person's
-   events for today via the `calendar.get_events` action, and draws them.
+   events for today via the `calendar.get_events` action, and draws them as plain text lines.
 
 ### Prerequisite: two calendar entities
 
@@ -326,31 +331,25 @@ automation:
         entity_id: sensor.<panel_name>_current_page
         to: canvas
     variables:
-      # Appearance
+      # Terminal-style appearance — plain text lines, no cards or badges
       font: 3
-      card_bg: 0           # matches the panel's solid black background
-      card_margin: 8
-      badge_color: 1694    # time badge color — adjust to taste
-      no_events_color: 52857
-      # Card geometry (portrait: 320px visible width)
-      card_x: 4
-      card_y: 52           # just below the 48px header
-      card_w: 312
-      card_h: 420          # fits within the 429px visible height limit
-      # Row geometry
-      row_h: 44
-      badge_w: 74
-      col_time_x: "{{ card_x + card_margin }}"
-      col_summary_x: "{{ card_x + card_margin + badge_w + 8 }}"
-      col_summary_w: "{{ card_w - card_margin * 2 - badge_w - 8 }}"
-      table_y: "{{ card_y + card_margin }}"
-      max_rows: "{{ ((card_h - card_margin * 2) / row_h) | int }}"
+      bg: 0                  # black, matches the panel's solid background
+      fg: 2016                # terminal green
+      dim_fg: 17008           # dimmed green, used for the "no events" line
+      # Layout (portrait: 320px visible width, header is 48px tall)
+      margin_x: 8
+      start_y: 56
+      line_h: 28
+      time_w: 60
+      summary_x: "{{ margin_x + time_w }}"
+      summary_w: "{{ 320 - margin_x * 2 - time_w }}"
+      max_rows: "{{ ((480 - start_y - margin_x) / line_h) | int }}"
       # Which person is currently selected
       person: "{{ states('input_select.nspanel_canvas_calendar') }}"
       calendar_entity: >
         {{ 'calendar.eduardo' if person == 'person1' else 'calendar.companheiro' }}
       person_label: >
-        {{ 'Seus compromissos' if person == 'person1' else 'Compromissos do companheiro' }}
+        {{ 'agenda/voce' if person == 'person1' else 'agenda/companheiro' }}
     actions:
       # Fetch today's events for the selected person's calendar
       - action: calendar.get_events
@@ -369,7 +368,7 @@ automation:
         data:
           page: canvas
           id: icon_state
-          txt: ""  # mdi:calendar
+          txt: "\uE0EC"  # mdi:calendar
 
       - action: esphome.<panel_name>_component_text
         data:
@@ -377,10 +376,10 @@ automation:
           id: page_label
           txt: "{{ person_label }}"
 
-      # Card background — drawn once before the rows
+      # Clear the content area — a plain fill, no card or badge styling
       - action: esphome.<panel_name>_command
         data:
-          cmd: "fill {{ card_x }},{{ card_y }},{{ card_w }},{{ card_h }},{{ card_bg }}"
+          cmd: "fill 0,48,320,432,{{ bg }}"
 
       - delay:
           milliseconds: 20
@@ -390,48 +389,41 @@ automation:
             sequence:
               - action: esphome.<panel_name>_command
                 data:
-                  cmd: "xstr {{ col_time_x }},{{ table_y }},{{ card_w - card_margin * 2 }},{{ row_h }},{{ font }},{{ no_events_color }},{{ card_bg }},1,1,1,\"Sem compromissos hoje\""
+                  cmd: "xstr {{ margin_x }},{{ start_y }},{{ 320 - margin_x * 2 }},{{ line_h }},{{ font }},{{ dim_fg }},{{ bg }},0,1,1,\"$ no events today\""
         default:
           - repeat:
               count: "{{ [events | count, max_rows] | min }}"
               sequence:
                 - variables:
                     ev: "{{ events[repeat.index - 1] }}"
-                    ry: "{{ table_y + (repeat.index - 1) * row_h }}"
+                    ry: "{{ start_y + (repeat.index - 1) * line_h }}"
                     is_all_day: "{{ ev.start | length == 10 }}"
                     start_label: >
-                      {{ 'Dia todo' if is_all_day else (as_timestamp(ev.start) | timestamp_custom('%H:%M', True)) }}
+                      {{ '--:--' if is_all_day else (as_timestamp(ev.start) | timestamp_custom('%H:%M', True)) }}
 
-                # Time badge
+                # Time, left column
                 - action: esphome.<panel_name>_command
                   data:
-                    cmd: "fill {{ col_time_x }},{{ ry }},{{ badge_w }},36,{{ badge_color }}"
+                    cmd: "xstr {{ margin_x }},{{ ry }},{{ time_w }},{{ line_h }},{{ font }},{{ fg }},{{ bg }},0,1,1,\"{{ start_label }}\""
 
                 - delay:
                     milliseconds: 10
 
+                # Summary, right column
                 - action: esphome.<panel_name>_command
                   data:
-                    cmd: "xstr {{ col_time_x }},{{ ry }},{{ badge_w }},36,{{ font }},65535,{{ badge_color }},1,1,1,\"{{ start_label }}\""
+                    cmd: "xstr {{ summary_x }},{{ ry }},{{ summary_w }},{{ line_h }},{{ font }},{{ fg }},{{ bg }},0,1,1,\"{{ ev.summary }}\""
 
+                # Allow the line to render before starting the next one
                 - delay:
-                    milliseconds: 10
-
-                # Event summary
-                - action: esphome.<panel_name>_command
-                  data:
-                    cmd: "xstr {{ col_summary_x }},{{ ry }},{{ col_summary_w }},36,{{ font }},65535,{{ card_bg }},0,1,1,\"{{ ev.summary }}\""
-
-                # Allow the full row to render before starting the next one
-                - delay:
-                    milliseconds: 50
+                    milliseconds: 30
 ```
 
 > [!NOTE]
-> Long event summaries are not wrapped or truncated automatically — keep `col_summary_w` in mind
-> and remember the 255-byte limit per `cmd` string mentioned above. Summaries containing a literal
-> `"` character will break the command string; strip or escape it first if that is a concern for
-> your calendars.
+> Long event summaries are not wrapped or truncated automatically — keep `summary_w` in mind and
+> remember the 255-byte limit per `cmd` string mentioned above. Summaries containing a literal `"`
+> character will break the command string; strip or escape it first if that is a concern for your
+> calendars.
 
 ## Nextion coordinate reference
 
